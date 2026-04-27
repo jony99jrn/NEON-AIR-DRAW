@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Air Draw - MediaPipe</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 15px;
+            display: flex;
+            gap: 20px;
+            backdrop-filter: blur(5px);
+            border: 1px solid #444;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #video-input {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            border-radius: 10px;
+            border: 2px solid #00f2ff;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+
+        label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        
+        #status-indicator {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-weight: bold;
+            background: rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div class="control-group">
+            <label>Color</label>
+            <input type="color" id="colorPicker" value="#00f2ff">
+        </div>
+        <div class="control-group">
+            <label>Thickness</label>
+            <input type="range" id="thickness" min="2" max="20" value="5">
+        </div>
+        <div class="control-group">
+            <label>Gesture Mode</label>
+            <span id="mode-text" style="color: #00f2ff;">Detecting...</span>
+        </div>
+    </div>
+
+    <video id="video-input" autoplay playsinline></video>
+    <canvas id="paintCanvas"></canvas>
+    <div id="status-indicator">Status: <span id="status">Initializing...</span></div>
+
+    <script>
+        const videoElement = document.getElementById('video-input');
+        const canvasElement = document.getElementById('paintCanvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const thicknessSlider = document.getElementById('thickness');
+        const modeText = document.getElementById('mode-text');
+        const statusText = document.getElementById('status');
+
+        let lastX = 0;
+        let lastY = 0;
+        let isDrawing = false;
+
+        // Resize canvas to fit window
+        function resize() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            canvasCtx.lineCap = 'round';
+            canvasCtx.lineJoin = 'round';
+            // Dark background for neon effect
+            canvasCtx.fillStyle = '#1a1a1a';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function onResults(results) {
+            statusText.innerText = "Running";
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Finger tip landmarks
+                const indexTip = landmarks[8];
+                const indexPip = landmarks[6];
+                const middleTip = landmarks[12];
+                const ringTip = landmarks[16];
+                const pinkyTip = landmarks[20];
+                const wrist = landmarks[0];
+
+                // Coordinates mapping
+                const x = (1 - indexTip.x) * canvasElement.width;
+                const y = indexTip.y * canvasElement.height;
+
+                // Gesture Detection Logic
+                const isIndexUp = indexTip.y < indexPip.y;
+                const isMiddleUp = middleTip.y < landmarks[10].y;
+                const isRingUp = ringTip.y < landmarks[14].y;
+                const isPinkyUp = pinkyTip.y < landmarks[18].y;
+
+                // 1. OPEN PALM = ERASE (Clear Canvas)
+                if (isIndexUp && isMiddleUp && isRingUp && isPinkyUp) {
+                    modeText.innerText = "ERASING";
+                    modeText.style.color = "#ff4444";
+                    resize(); // Clears everything
+                    isDrawing = false;
+                } 
+                // 2. CLOSED FIST = PAUSE
+                else if (!isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp) {
+                    modeText.innerText = "PAUSED";
+                    modeText.style.color = "#ffbb33";
+                    isDrawing = false;
+                }
+                // 3. ONE FINGER (INDEX) = DRAW
+                else if (isIndexUp && !isMiddleUp) {
+                    modeText.innerText = "DRAWING";
+                    modeText.style.color = "#00f2ff";
+                    
+                    if (isDrawing) {
+                        drawNeonLine(lastX, lastY, x, y);
+                    }
+                    lastX = x;
+                    lastY = y;
+                    isDrawing = true;
+                } else {
+                    isDrawing = false;
+                }
+            } else {
+                isDrawing = false;
+                modeText.innerText = "No Hand Detected";
+            }
+        }
+
+        function drawNeonLine(x1, y1, x2, y2) {
+            const color = colorPicker.value;
+            const size = thicknessSlider.value;
+
+            // Neon Glow Effect
+            canvasCtx.shadowBlur = 15;
+            canvasCtx.shadowColor = color;
+            canvasCtx.strokeStyle = color;
+            canvasCtx.lineWidth = size;
+
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(x1, y1);
+            canvasCtx.lineTo(x2, y2);
+            canvasCtx.stroke();
+            
+            // Core white line for extra glow effect
+            canvasCtx.shadowBlur = 0;
+            canvasCtx.strokeStyle = 'white';
+            canvasCtx.lineWidth = size / 3;
+            canvasCtx.stroke();
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        camera.start();
+
+    </script>
+</body>
+</html>
