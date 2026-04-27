@@ -3,198 +3,156 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon Air Draw - MediaPipe</title>
+    <title>Pro Neon Air Draw - JRN Studio</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
 
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background: #1a1a1a;
-            color: white;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        #controls {
-            position: absolute;
-            top: 20px;
-            z-index: 10;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 15px;
-            border-radius: 15px;
-            display: flex;
-            gap: 20px;
-            backdrop-filter: blur(5px);
-            border: 1px solid #444;
-        }
-
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-
-        canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-        }
-
-        #video-input {
-            position: absolute;
-            bottom: 20px;
-            right: 20px;
-            width: 200px;
-            border-radius: 10px;
-            border: 2px solid #00f2ff;
-            transform: scaleX(-1); /* Mirror effect */
-        }
-
-        label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        body { margin: 0; background: #0a0a0a; color: #fff; font-family: 'Inter', sans-serif; overflow: hidden; }
         
-        #status-indicator {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            padding: 10px 20px;
-            border-radius: 30px;
-            font-weight: bold;
-            background: rgba(0,0,0,0.5);
+        #ui-layer {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 100; display: flex; gap: 15px; background: rgba(20, 20, 20, 0.8);
+            padding: 12px 25px; border-radius: 50px; border: 1px solid #333; backdrop-filter: blur(10px);
+        }
+
+        .tool { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+        input[type="color"] { border: none; width: 30px; height: 30px; cursor: pointer; background: none; }
+        input[type="range"] { width: 100px; accent-color: #00f2ff; }
+
+        #save-btn {
+            background: #00f2ff; color: #000; border: none; padding: 8px 15px;
+            border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.3s;
+        }
+        #save-btn:hover { background: #fff; box-shadow: 0 0 15px #00f2ff; }
+
+        #video-preview {
+            position: absolute; bottom: 20px; right: 20px; width: 180px;
+            border-radius: 12px; border: 2px solid #333; transform: scaleX(-1);
+        }
+
+        canvas { position: absolute; top: 0; left: 0; cursor: none; }
+        
+        .status-badge {
+            position: absolute; bottom: 20px; left: 20px; font-size: 12px;
+            padding: 5px 15px; border-radius: 5px; border: 1px solid #444;
         }
     </style>
 </head>
 <body>
 
-    <div id="controls">
-        <div class="control-group">
-            <label>Color</label>
+    <div id="ui-layer">
+        <div class="tool">
             <input type="color" id="colorPicker" value="#00f2ff">
         </div>
-        <div class="control-group">
-            <label>Thickness</label>
-            <input type="range" id="thickness" min="2" max="20" value="5">
+        <div class="tool">
+            <input type="range" id="thickness" min="3" max="25" value="8">
         </div>
-        <div class="control-group">
-            <label>Gesture Mode</label>
-            <span id="mode-text" style="color: #00f2ff;">Detecting...</span>
-        </div>
+        <button id="save-btn">Download Art</button>
     </div>
 
-    <video id="video-input" autoplay playsinline></video>
-    <canvas id="paintCanvas"></canvas>
-    <div id="status-indicator">Status: <span id="status">Initializing...</span></div>
+    <canvas id="canvas"></canvas>
+    <video id="webcam" autoplay playsinline style="display:none;"></video>
+    <video id="video-preview" autoplay playsinline></video>
+
+    <div class="status-badge">Mode: <span id="mode">Detecting...</span></div>
 
     <script>
-        const videoElement = document.getElementById('video-input');
-        const canvasElement = document.getElementById('paintCanvas');
-        const canvasCtx = canvasElement.getContext('2d');
-        const colorPicker = document.getElementById('colorPicker');
-        const thicknessSlider = document.getElementById('thickness');
-        const modeText = document.getElementById('mode-text');
-        const statusText = document.getElementById('status');
+        const video = document.getElementById('webcam');
+        const preview = document.getElementById('video-preview');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const modeEl = document.getElementById('mode');
+        const saveBtn = document.getElementById('save-btn');
 
-        let lastX = 0;
-        let lastY = 0;
+        let lastX = 0, lastY = 0;
         let isDrawing = false;
+        
+        // Smoothing factors
+        let smoothX = 0, smoothY = 0;
+        const smoothing = 0.4; 
 
-        // Resize canvas to fit window
-        function resize() {
-            canvasElement.width = window.innerWidth;
-            canvasElement.height = window.innerHeight;
-            canvasCtx.lineCap = 'round';
-            canvasCtx.lineJoin = 'round';
-            // Dark background for neon effect
-            canvasCtx.fillStyle = '#1a1a1a';
-            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+        function initCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
-        window.addEventListener('resize', resize);
-        resize();
+        window.addEventListener('resize', initCanvas);
+        initCanvas();
 
         function onResults(results) {
-            statusText.innerText = "Running";
-            
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0];
-                
-                // Finger tip landmarks
-                const indexTip = landmarks[8];
-                const indexPip = landmarks[6];
-                const middleTip = landmarks[12];
-                const ringTip = landmarks[16];
-                const pinkyTip = landmarks[20];
-                const wrist = landmarks[0];
+                const hand = results.multiHandLandmarks[0];
+                const indexTip = hand[8];
+                const indexPip = hand[6];
+                const middleTip = hand[12];
+                const thumbTip = hand[4];
 
-                // Coordinates mapping
-                const x = (1 - indexTip.x) * canvasElement.width;
-                const y = indexTip.y * canvasElement.height;
+                // Coordinates with mirroring
+                const targetX = (1 - indexTip.x) * canvas.width;
+                const targetY = indexTip.y * canvas.height;
 
-                // Gesture Detection Logic
+                // Apply Smoothing (EMA)
+                smoothX += (targetX - smoothX) * smoothing;
+                smoothY += (targetY - smoothY) * smoothing;
+
+                // Logic: Index Up = Draw, Palm Open = Clear, Fist = Pause
                 const isIndexUp = indexTip.y < indexPip.y;
-                const isMiddleUp = middleTip.y < landmarks[10].y;
-                const isRingUp = ringTip.y < landmarks[14].y;
-                const isPinkyUp = pinkyTip.y < landmarks[18].y;
+                const isMiddleUp = middleTip.y < hand[10].y;
+                const isRingUp = hand[16].y < hand[14].y;
 
-                // 1. OPEN PALM = ERASE (Clear Canvas)
-                if (isIndexUp && isMiddleUp && isRingUp && isPinkyUp) {
-                    modeText.innerText = "ERASING";
-                    modeText.style.color = "#ff4444";
-                    resize(); // Clears everything
+                if (isIndexUp && isMiddleUp && isRingUp) {
+                    modeEl.innerText = "ERASING";
+                    initCanvas(); 
                     isDrawing = false;
-                } 
-                // 2. CLOSED FIST = PAUSE
-                else if (!isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp) {
-                    modeText.innerText = "PAUSED";
-                    modeText.style.color = "#ffbb33";
-                    isDrawing = false;
-                }
-                // 3. ONE FINGER (INDEX) = DRAW
-                else if (isIndexUp && !isMiddleUp) {
-                    modeText.innerText = "DRAWING";
-                    modeText.style.color = "#00f2ff";
-                    
+                } else if (isIndexUp && !isMiddleUp) {
+                    modeEl.innerText = "DRAWING";
                     if (isDrawing) {
-                        drawNeonLine(lastX, lastY, x, y);
+                        drawNeon(lastX, lastY, smoothX, smoothY);
                     }
-                    lastX = x;
-                    lastY = y;
+                    lastX = smoothX;
+                    lastY = smoothY;
                     isDrawing = true;
                 } else {
+                    modeEl.innerText = "IDLE / PAUSED";
                     isDrawing = false;
                 }
-            } else {
-                isDrawing = false;
-                modeText.innerText = "No Hand Detected";
             }
         }
 
-        function drawNeonLine(x1, y1, x2, y2) {
-            const color = colorPicker.value;
-            const size = thicknessSlider.value;
+        function drawNeon(x1, y1, x2, y2) {
+            const color = document.getElementById('colorPicker').value;
+            const width = document.getElementById('thickness').value;
 
-            // Neon Glow Effect
-            canvasCtx.shadowBlur = 15;
-            canvasCtx.shadowColor = color;
-            canvasCtx.strokeStyle = color;
-            canvasCtx.lineWidth = size;
-
-            canvasCtx.beginPath();
-            canvasCtx.moveTo(x1, y1);
-            canvasCtx.lineTo(x2, y2);
-            canvasCtx.stroke();
+            // 1. Outer Glow
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = color;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
             
-            // Core white line for extra glow effect
-            canvasCtx.shadowBlur = 0;
-            canvasCtx.strokeStyle = 'white';
-            canvasCtx.lineWidth = size / 3;
-            canvasCtx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+
+            // 2. Inner Bright Core
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = width / 4;
+            ctx.stroke();
         }
+
+        // Save Function
+        saveBtn.onclick = () => {
+            const link = document.createElement('a');
+            link.download = 'my-air-art.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        };
 
         const hands = new Hands({
             locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -203,18 +161,17 @@
         hands.setOptions({
             maxNumHands: 1,
             modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
+            minDetectionConfidence: 0.8,
+            minTrackingConfidence: 0.8
         });
-
         hands.onResults(onResults);
 
-        const camera = new Camera(videoElement, {
+        const camera = new Camera(video, {
             onFrame: async () => {
-                await hands.send({image: videoElement});
+                await hands.send({image: video});
+                preview.srcObject = video.srcObject; // Mirror to preview
             },
-            width: 640,
-            height: 480
+            width: 1280, height: 720
         });
         camera.start();
 
