@@ -3,157 +3,161 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pro Neon Air Draw - JRN Studio</title>
+    <title>AI Air Draw Pro | JRN STUDIO</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 
     <style>
-        body { margin: 0; background: #0a0a0a; color: #fff; font-family: 'Inter', sans-serif; overflow: hidden; }
+        :root { --neon: #00f2ff; }
+        body { margin: 0; background: #050505; color: white; font-family: 'Segoe UI', sans-serif; overflow: hidden; touch-action: none; }
         
-        #ui-layer {
-            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-            z-index: 100; display: flex; gap: 15px; background: rgba(20, 20, 20, 0.8);
-            padding: 12px 25px; border-radius: 50px; border: 1px solid #333; backdrop-filter: blur(10px);
+        #ui-bar {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            z-index: 100; display: flex; gap: 15px; background: rgba(0,0,0,0.8);
+            padding: 10px 20px; border-radius: 30px; border: 1px solid #333; backdrop-filter: blur(10px);
+            width: 90%; max-width: 400px; justify-content: space-around;
         }
 
-        .tool { display: flex; flex-direction: column; align-items: center; gap: 5px; }
-        input[type="color"] { border: none; width: 30px; height: 30px; cursor: pointer; background: none; }
-        input[type="range"] { width: 100px; accent-color: #00f2ff; }
+        .control { display: flex; flex-direction: column; align-items: center; font-size: 10px; }
+        input[type="color"] { border: none; width: 25px; height: 25px; background: none; cursor: pointer; }
+        input[type="range"] { width: 80px; accent-color: var(--neon); }
 
-        #save-btn {
-            background: #00f2ff; color: #000; border: none; padding: 8px 15px;
-            border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.3s;
-        }
-        #save-btn:hover { background: #fff; box-shadow: 0 0 15px #00f2ff; }
-
+        #canvas { position: absolute; top: 0; left: 0; }
+        
         #video-preview {
-            position: absolute; bottom: 20px; right: 20px; width: 180px;
-            border-radius: 12px; border: 2px solid #333; transform: scaleX(-1);
+            position: absolute; bottom: 15px; left: 15px; width: 120px;
+            border-radius: 10px; border: 2px solid var(--neon); transform: scaleX(-1);
+            background: #222;
         }
 
-        canvas { position: absolute; top: 0; left: 0; cursor: none; }
-        
-        .status-badge {
-            position: absolute; bottom: 20px; left: 20px; font-size: 12px;
-            padding: 5px 15px; border-radius: 5px; border: 1px solid #444;
+        #btn-save {
+            background: var(--neon); border: none; color: black; padding: 5px 15px;
+            border-radius: 15px; font-weight: bold; cursor: pointer;
+        }
+
+        .status {
+            position: absolute; bottom: 15px; right: 15px; font-size: 12px;
+            background: rgba(0,0,0,0.5); padding: 5px 12px; border-radius: 20px;
         }
     </style>
 </head>
 <body>
 
-    <div id="ui-layer">
-        <div class="tool">
+    <div id="ui-bar">
+        <div class="control">
             <input type="color" id="colorPicker" value="#00f2ff">
         </div>
-        <div class="tool">
-            <input type="range" id="thickness" min="3" max="25" value="8">
+        <div class="control">
+            <input type="range" id="thickness" min="2" max="30" value="10">
         </div>
-        <button id="save-btn">Download Art</button>
+        <button id="btn-save">Save</button>
+        <button onclick="clearCanvas()" style="background:#ff4444; color:white; border:none; border-radius:15px; padding:5px 10px;">Clear</button>
     </div>
 
     <canvas id="canvas"></canvas>
     <video id="webcam" autoplay playsinline style="display:none;"></video>
-    <video id="video-preview" autoplay playsinline></video>
+    <video id="video-preview" autoplay playsinline muted></video>
 
-    <div class="status-badge">Mode: <span id="mode">Detecting...</span></div>
+    <div class="status">Mode: <span id="mode" style="color:var(--neon)">Wait...</span></div>
 
     <script>
-        const video = document.getElementById('webcam');
-        const preview = document.getElementById('video-preview');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const modeEl = document.getElementById('mode');
-        const saveBtn = document.getElementById('save-btn');
+        const video = document.getElementById('webcam');
+        const preview = document.getElementById('video-preview');
+        const modeText = document.getElementById('mode');
 
         let lastX = 0, lastY = 0;
         let isDrawing = false;
         
-        // Smoothing factors
-        let smoothX = 0, smoothY = 0;
-        const smoothing = 0.4; 
+        // --- 1. SMOOTHING ENGINE ---
+        let currentX = 0, currentY = 0;
+        const lerp = (start, end, amt) => (1 - amt) * start + amt * end;
 
-        function initCanvas() {
+        function setupCanvas() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            ctx.fillStyle = '#050505';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            ctx.fillStyle = '#0a0a0a';
+        }
+        window.addEventListener('resize', setupCanvas);
+        setupCanvas();
+
+        function clearCanvas() {
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
-        window.addEventListener('resize', initCanvas);
-        initCanvas();
 
+        // --- 2. AI LOGIC ---
         function onResults(results) {
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const hand = results.multiHandLandmarks[0];
-                const indexTip = hand[8];
-                const indexPip = hand[6];
-                const middleTip = hand[12];
-                const thumbTip = hand[4];
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Finger tips
+                const index = landmarks[8];
+                const middle = landmarks[12];
+                const indexPip = landmarks[6];
 
-                // Coordinates with mirroring
-                const targetX = (1 - indexTip.x) * canvas.width;
-                const targetY = indexTip.y * canvas.height;
+                // Map to screen (with mirroring)
+                const tx = (1 - index.x) * canvas.width;
+                const ty = index.y * canvas.height;
 
-                // Apply Smoothing (EMA)
-                smoothX += (targetX - smoothX) * smoothing;
-                smoothY += (targetY - smoothY) * smoothing;
+                // Smoothing movement
+                currentX = lerp(currentX, tx, 0.4);
+                currentY = lerp(currentY, ty, 0.4);
 
-                // Logic: Index Up = Draw, Palm Open = Clear, Fist = Pause
-                const isIndexUp = indexTip.y < indexPip.y;
-                const isMiddleUp = middleTip.y < hand[10].y;
-                const isRingUp = hand[16].y < hand[14].y;
+                // Gestures
+                const isIndexUp = index.y < indexPip.y;
+                const isMiddleUp = middle.y < landmarks[10].y;
+                const isOpenPalm = isIndexUp && isMiddleUp && landmarks[16].y < landmarks[14].y;
 
-                if (isIndexUp && isMiddleUp && isRingUp) {
-                    modeEl.innerText = "ERASING";
-                    initCanvas(); 
+                if (isOpenPalm) {
+                    modeText.innerText = "CLEARING";
+                    clearCanvas();
                     isDrawing = false;
                 } else if (isIndexUp && !isMiddleUp) {
-                    modeEl.innerText = "DRAWING";
+                    modeText.innerText = "DRAWING";
                     if (isDrawing) {
-                        drawNeon(lastX, lastY, smoothX, smoothY);
+                        draw(lastX, lastY, currentX, currentY);
                     }
-                    lastX = smoothX;
-                    lastY = smoothY;
+                    lastX = currentX;
+                    lastY = currentY;
                     isDrawing = true;
                 } else {
-                    modeEl.innerText = "IDLE / PAUSED";
+                    modeText.innerText = "IDLE";
                     isDrawing = false;
                 }
+            } else {
+                modeText.innerText = "NO HAND";
+                isDrawing = false;
             }
         }
 
-        function drawNeon(x1, y1, x2, y2) {
+        function draw(x1, y1, x2, y2) {
             const color = document.getElementById('colorPicker').value;
-            const width = document.getElementById('thickness').value;
+            const size = document.getElementById('thickness').value;
 
-            // 1. Outer Glow
-            ctx.shadowBlur = 20;
+            // Neon Glow layers
+            ctx.shadowBlur = 15;
             ctx.shadowColor = color;
             ctx.strokeStyle = color;
-            ctx.lineWidth = width;
-            
+            ctx.lineWidth = size;
+
             ctx.beginPath();
             ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
             ctx.stroke();
 
-            // 2. Inner Bright Core
+            // Bright core
             ctx.shadowBlur = 0;
             ctx.strokeStyle = '#fff';
-            ctx.lineWidth = width / 4;
+            ctx.lineWidth = size / 3;
             ctx.stroke();
         }
 
-        // Save Function
-        saveBtn.onclick = () => {
-            const link = document.createElement('a');
-            link.download = 'my-air-art.png';
-            link.href = canvas.toDataURL();
-            link.click();
-        };
-
+        // --- 3. POWERFUL CAMERA CONFIG ---
         const hands = new Hands({
             locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
         });
@@ -161,19 +165,32 @@
         hands.setOptions({
             maxNumHands: 1,
             modelComplexity: 1,
-            minDetectionConfidence: 0.8,
-            minTrackingConfidence: 0.8
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
         });
         hands.onResults(onResults);
 
+        // Mobile Friendly Camera Start
         const camera = new Camera(video, {
             onFrame: async () => {
                 await hands.send({image: video});
-                preview.srcObject = video.srcObject; // Mirror to preview
+                preview.srcObject = video.srcObject;
             },
-            width: 1280, height: 720
+            width: 640,
+            height: 480,
+            facingMode: 'user' // Ensures front camera on phones
         });
-        camera.start();
+        camera.start().catch(err => {
+            alert("Camera Error: Please allow camera access and use HTTPS");
+        });
+
+        // Save Image
+        document.getElementById('btn-save').onclick = () => {
+            const link = document.createElement('a');
+            link.download = 'jrn-art.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        };
 
     </script>
 </body>
